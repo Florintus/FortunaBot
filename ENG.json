@@ -1,0 +1,131 @@
+{
+  "menu": {
+         "welcome_text": "👋Hi!\n The God of random will help you create a giveaway on the channel.\n Are you ready to create a new giveaway?",
+         "menu_buttons": ["Create giveaway 🎁", "My giveaways 🎉", "I participate 🎟", "Сменить язык 🇷🇺", "Support ⁉️", "Share with a friends 👥"],
+         "invite": "Share the bot with your friends by sending them the bot username \n @RandomGodBot",
+         "support": "t.me/FeedbackRandomGodBot"
+        },
+  "draw": {
+         
+         "back_in_menu": "Back in menu ↩️",
+         "back": "Back ↩️",
+         "draw_buttons": ["Change start time ⏳", "Change end time ⌛️", "Change number of winners 🏆", "Change discription 📑", "Change photo/gif 🖼", "Add TG to requirements ✅", "Add Twitch to requirements ✅", "Publish 🎲", "Back in menu ↩️"],
+
+         "chanel_id":"Enter the username of the channel where the giveaway will be published in @username format.  You must be the administrator of this channel and add bot to the administrators.\n If the channel is private, then you need to send the id of this channel to find out the id of the private channel, forward any post from this channel to the special bot @getmyid_bot, the bottom line is the response from the bot and will be the id of your private channel.  Forward this id to the bot",
+         "chanel_id_check": "Enter the username of the channel for verification in @username format.\n \n If the channel is private, then you need to send the id of this channel to find out the id of the private channel, forward any post from this channel to the special bot @getmyid_bot, the bottom line is the response from the bot and will be the id of your private channel.  Forward this id to the bot.\n Indicate the link to this channel in the description so that the participants of the giveaway know which channels you need to subscribe",
+         "chanel_twitch_check": "Enter Twitch channel for verification (login, @login or link like https://twitch.tv/login)",
+         "not_admin":"For publish the giveaway, you must be the administrator of this channel.  Send username as administrator",
+         "not_in_chanel":"The bot is not the administrator of this channel.  Add bot to admins and submit @username again",
+         "tg_channel_exists": "This Telegram channel is already added",
+         
+         "draw_text":"Enter a description of the giveaway. \n Tip: describe what the prizes will be, how many winners there will be and what each of them will win, which channels the participants need to subscribe to, and indicate the date and time of the end of the giveaway.\n You can use the html markup.\n 1)Bold text - <b>your text</b>\n 2)Italic text - <i>your text</i>\n 3)Hyperlink to channel - <a href='your channel link'>your text</a>.\n Link must be in this format: https://t.me/channel",
+         "file":"Send a picture or GIF (optional, if not needed, send any other message)",
+         
+         "winers_count":"Enter the number of winners",
+         "not_int": "This is not a number",
+
+         "post_time":"Enter the giveaway start date/time in format YYYY-MM-DD HH:MM (UTC+0). Example: 2020-10-25 21:05. Note: use leading zeros (02:05)",
+         "end_time":"Enter the giveaway end date/time in format YYYY-MM-DD HH:MM (UTC+0). Example: 2020-10-31 21:55. Note: use leading zeros (02:05)",
+         "utc_time_note": "All time must be entered in UTC+0",
+         "utc_time_example": "Current UTC+0 time (example):",
+         "utc_now": "Current UTC+0:",
+         "over_time": "This time has already passed. Enter a date/time later than now",
+         "invalid_format_time": "Invalid date/time format",
+         "post_biger": "Start time must be earlier than end time",
+         "you_entered": "You entered:",
+         "expected_format": "Expected format:",
+         "start_time_label": "Start:",
+         "end_time_label": "End:",
+
+         "get_on":"Participate",
+
+         "change_text": "What do you need to change in the giveaway?",
+         "chanel/chat": "Channel/chat:",
+         "text": "Discription:",
+         "count_text":"Number of winners:",
+         "post_time_text":"Start time:",
+         "over_time_text":"End time:",
+
+         "submit_text":"The giveaway has been created and will be published on the channel at the selected time",
+
+
+         "play":"Participate",
+         "not_subscribe": "@RandomGodBot: You haven't subscribed to all channels, please read the giveaway discription carefully and subscribe to all necessary channels to participate",
+         "need_twitch_link": "@RandomGodBot: You need to link your Twitch account via /twitch to participate",
+         "need_twitch_link_hint": "To participate in this giveaway, link your Twitch account first.",
+         "twitch_link_start_button": "Link Twitch",
+         "twitch_link_check_button": "Check link status",
+         "twitch_linked": "Linked Twitch account:",
+         "not_follow_twitch": "@RandomGodBot: You are not following required Twitch channels:",
+         "twitch_check_error": "Failed to verify Twitch follow status. Try again later",
+         "join_failed": "Failed to join giveaway. Try again",
+
+         "twitch_not_configured": "Twitch check is temporarily unavailable. Admin did not configure Twitch API",
+         "twitch_auth_failed": "Failed to start Twitch authorization. Try again later",
+         "twitch_auth_open": "Open this page:",
+         "twitch_auth_code": "Enter this code:",
+         "twitch_auth_poll": "After confirmation click 'Check link status'",
+         "twitch_auth_started": "Twitch authorization started",
+         "twitch_auth_linked": "Twitch linked:",
+         "twitch_auth_pending": "Authorization is not completed yet. Confirm code in browser",
+         "twitch_auth_expired": "Code expired. Start linking again",
+         "twitch_auth_denied": "You denied Twitch authorization",
+
+         "twitch_channel_invalid": "Invalid Twitch login. Example: ninja or https://twitch.tv/ninja",
+         "twitch_channel_not_found": "Twitch channel not found",
+         "twitch_channel_exists": "This Twitch channel is already added:",
+         "twitch_channel_added": "Added Twitch channel:",
+
+         "required_tg_channels": "Required Telegram channels:",
+         "required_twitch_channels": "Required Twitch channels:",
+         "already_in":"@RandomGodBot: You've already taken part",
+         "got_on":"@RandomGodBot: Congratulations, you entered the giveaway!",
+
+         "winers":"The giveaway has ended.\n Winners:",
+         "no_winers":"No winners",
+
+         "failed_post": "Failed to send the giveaway because the channel was deleted",
+         "your_draw_over": "Your giveaway is over",
+         "draw_finished_early": "Your giveaway was finished early"
+        },
+
+  "my_draw":{
+         "no_draw": "You have no pending or active giveaways",
+         "last":"Last",
+         "first":"First",
+         "your_draw":"Your giveaway:",
+         "status": "Status",
+         "status_pending": "Pending publication",
+         "status_active": "Active",
+         "cancel_pending_button": "Cancel publication",
+		 "edit_pending_button": "Edit",
+         "finish_now_button": "Finish early",
+         "pending_cancelled": "Pending giveaway was cancelled",
+         "draw_finished_now": "Giveaway was finished early",
+         "draw_not_found": "Giveaway not found",
+         "action_forbidden": "This action is available only to the giveaway owner",
+         "finish_failed": "Failed to finish giveaway early",
+         "chanel/chat": "Channel/chat:",
+           "text": "Discription:",
+           "count_text":"Number of winners:",
+           "post_time_text":"Time of start:",
+           "over_time_text":"Time of end:",
+
+           "next":"Next",
+           "back":"Back"
+
+        },
+
+  "my_part":{
+         "no_draw": "You are not participating in any giveaways",
+         "your_draw": "You participate in the giveaway:",
+         "active": "Active",
+         "ended": "Ended",
+         "link": "Link:",
+         "winners_time": "Winners announcement time:",
+         "next": "Next",
+         "back": "Back",
+         "last": "Last",
+         "first": "First"
+        }
+}
