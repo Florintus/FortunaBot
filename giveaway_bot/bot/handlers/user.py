@@ -1,8 +1,11 @@
 import traceback
+from html import escape
 from telebot.types import CallbackQuery
 from bot.services.giveaway_service import GiveawayService
 from bot.services.subscription_checker import SubscriptionChecker
 from bot.services.twitch_service import twitch_service
+from bot.keyboards.inline import get_twitch_device_poll_keyboard
+from bot.utils.twitch_parse import normalize_twitch_channel_login
 
 bot = None
 
@@ -11,6 +14,37 @@ def register_user_handlers(telegram_bot):
     """Регистрация обработчиков пользователей"""
     global bot
     bot = telegram_bot
+
+    @bot.callback_query_handler(func=lambda call: call.data == "twitch_auth_poll")
+    def twitch_auth_poll(call: CallbackQuery):
+        status, detail = twitch_service.poll_device_auth(call.from_user.id)
+        if status == "success":
+            bot.answer_callback_query(call.id, f"✅ Привязано: {detail}")
+            bot.send_message(
+                call.message.chat.id,
+                f"✅ Twitch <b>{detail}</b> привязан. Можно участвовать в розыгрышах.",
+                parse_mode="HTML",
+            )
+        elif status == "pending":
+            bot.answer_callback_query(
+                call.id,
+                "Ещё не подтверждено на Twitch. Введите код на сайте и нажмите снова.",
+                show_alert=True,
+            )
+        elif status == "wait":
+            bot.answer_callback_query(
+                call.id,
+                f"Подождите ~{detail} с и нажмите снова.",
+                show_alert=True,
+            )
+        elif status == "expired":
+            bot.answer_callback_query(call.id, "Срок кода истёк. Отправьте /link_twitch снова.", show_alert=True)
+        elif status == "denied":
+            bot.answer_callback_query(call.id, "Авторизация отклонена.", show_alert=True)
+        elif status == "no_session":
+            bot.answer_callback_query(call.id, "Нет активной привязки. Отправьте /link_twitch", show_alert=True)
+        else:
+            bot.answer_callback_query(call.id, detail or "Ошибка", show_alert=True)
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("participate_"))
     def participate_handler(call: CallbackQuery):
@@ -52,28 +86,38 @@ def register_user_handlers(telegram_bot):
                 )
                 return
 
-            # Проверяем Twitch подписки (если есть)
+            # Проверяем Twitch (OAuth Device Flow + user:read:follows)
             if giveaway['twitch_channels']:
-                twitch_username = twitch_service.get_linked_twitch(user.id)
-
-                if not twitch_username:
+                if not twitch_service.is_configured():
                     bot.answer_callback_query(
                         call.id,
-                        "❌ Необходимо привязать Twitch аккаунт!",
-                        show_alert=True
+                        "❌ Проверка Twitch недоступна (бот не настроен).",
+                        show_alert=True,
+                    )
+                    return
+
+                if not twitch_service.has_oauth_link(user.id):
+                    bot.answer_callback_query(
+                        call.id,
+                        "❌ Нужна привязка Twitch через сайт!",
+                        show_alert=True,
                     )
                     bot.send_message(
                         user.id,
-                        "🎮 Для участия нужно привязать Twitch аккаунт.\n\n"
-                        "Отправьте команду /link_twitch <ваш_ник_twitch>\n"
-                        "Например: /link_twitch my_username"
+                        "🎮 Для участия привяжите Twitch через OAuth:\n\n"
+                        "Отправьте команду <b>/link_twitch</b> (без аргументов) — "
+                        "бот пришлёт ссылку и код для входа на twitch.tv.\n\n"
+                        "Старая привязка только по нику без входа не даёт проверить подписки.",
+                        parse_mode="HTML",
                     )
                     return
 
                 missing_twitch = []
                 for channel in giveaway['twitch_channels']:
-                    if not twitch_service.check_subscription(twitch_username, channel):
-                        missing_twitch.append(channel)
+                    if not twitch_service.check_follows_channel(user.id, channel):
+                        missing_twitch.append(
+                            normalize_twitch_channel_login(channel) or channel
+                        )
 
                 if missing_twitch:
                     missing_text = "\n".join([f"• https://twitch.tv/{ch}" for ch in missing_twitch])
@@ -84,7 +128,7 @@ def register_user_handlers(telegram_bot):
                     )
                     bot.send_message(
                         user.id,
-                        f"🎮 Для участия подпишитесь на Twitch каналы:\n\n{missing_text}"
+                        f"🎮 Подпишитесь (follow) на каналы в Twitch:\n\n{missing_text}"
                     )
                     return
 
@@ -114,29 +158,68 @@ def register_user_handlers(telegram_bot):
 
     @bot.message_handler(commands=['link_twitch'])
     def link_twitch_command(message):
-        """Привязка Twitch аккаунта"""
+        """Привязка Twitch: OAuth (без аргументов) или устаревший ввод ника."""
         try:
             parts = message.text.split(maxsplit=1)
+
             if len(parts) < 2:
+                if not twitch_service.is_configured():
+                    bot.send_message(
+                        message.chat.id,
+                        "❌ Twitch OAuth не настроен: нужны <b>TWITCH_CLIENT_ID</b> и "
+                        "<b>TWITCH_CLIENT_SECRET</b> в окружении (или в .env для Docker Compose). "
+                        "Явное выключение: <code>TWITCH_DISABLED=true</code> или "
+                        "<code>TWITCH_ENABLED=false</code>.",
+                        parse_mode="HTML",
+                    )
+                    return
+                info = twitch_service.start_device_auth(message.from_user.id)
+                if not info:
+                    bot.send_message(
+                        message.chat.id,
+                        "❌ Не удалось начать привязку Twitch. Попробуйте позже.",
+                    )
+                    return
+                uri = info["verification_uri"]
+                code = info["user_code"]
+                safe_uri = escape(uri)
+                safe_code = escape(code)
                 bot.send_message(
                     message.chat.id,
-                    "❌ Использование: /link_twitch <ваш_ник_twitch>\n"
-                    "Например: /link_twitch my_username"
+                    "🎮 <b>Привязка Twitch</b>\n\n"
+                    f'1. Откройте: <a href="{safe_uri}">{safe_uri}</a>\n'
+                    f"2. Введите код: <code>{safe_code}</code>\n\n"
+                    "После входа на Twitch нажмите кнопку ниже.",
+                    parse_mode="HTML",
+                    reply_markup=get_twitch_device_poll_keyboard(),
+                    disable_web_page_preview=True,
                 )
                 return
 
             twitch_username = parts[1].strip().replace('@', '')
-            success = twitch_service.link_account(message.from_user.id, twitch_username)
+            ok = twitch_service.link_account_manual(message.from_user.id, twitch_username)
 
-            if success:
+            if ok:
                 bot.send_message(
                     message.chat.id,
-                    f"✅ Twitch аккаунт <b>{twitch_username}</b> успешно привязан!",
-                    parse_mode='HTML'
+                    f"⚠️ Ник <b>{twitch_username}</b> сохранён, но для розыгрышей нужен вход через Twitch.\n\n"
+                    "Отправьте <b>/link_twitch</b> без текста и пройдите авторизацию по коду.",
+                    parse_mode="HTML",
                 )
             else:
                 bot.send_message(message.chat.id, "❌ Ошибка привязки аккаунта")
 
         except Exception as e:
             print(f"Ошибка привязки Twitch: {e}")
-            bot.send_message(message.chat.id, "❌ Произошла ошибка")
+            traceback.print_exc()
+            hint = ""
+            err = str(e).lower()
+            if "no such table" in err or "undefinedtable" in err or "does not exist" in err:
+                hint = "\n\nПерезапустите бота (нужна таблица <code>twitch_device_auth</code> в БД)."
+            detail = escape(str(e))[:400]
+            bot.send_message(
+                message.chat.id,
+                "❌ Ошибка при привязке Twitch. См. логи сервера.\n"
+                f"<code>{detail}</code>" + hint,
+                parse_mode="HTML",
+            )

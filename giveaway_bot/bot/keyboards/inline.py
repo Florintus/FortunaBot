@@ -51,6 +51,10 @@ def get_calendar_keyboard(year: int, month: int, prefix: str) -> InlineKeyboardM
                 row.append(InlineKeyboardButton(label, callback_data=cb))
         markup.row(*row)
 
+    if prefix == "start":
+        markup.add(InlineKeyboardButton("◀️ Назад (медиа)", callback_data="wizard_back"))
+    if prefix == "end":
+        markup.add(InlineKeyboardButton("◀️ Назад (длительность)", callback_data="dur_end_back"))
     markup.add(InlineKeyboardButton("❌ Отмена", callback_data="cancel_giveaway"))
     return markup
 
@@ -127,12 +131,44 @@ def get_confirm_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton("✅ Опубликовать", callback_data="confirm_publish"),
         InlineKeyboardButton("❌ Отменить",     callback_data="cancel_giveaway")
     )
+    markup.add(InlineKeyboardButton("◀️ Назад к датам", callback_data="wizard_back"))
     return markup
 
 
-def get_skip_button(callback_data: str) -> InlineKeyboardMarkup:
+def get_skip_button(callback_data: str, with_wizard_back: bool = False) -> InlineKeyboardMarkup:
     markup = InlineKeyboardMarkup()
+    if with_wizard_back:
+        markup.add(InlineKeyboardButton("◀️ Назад", callback_data="wizard_back"))
     markup.add(InlineKeyboardButton("⏭ Пропустить", callback_data=callback_data))
+    return markup
+
+
+def get_media_step_keyboard(with_wizard_back: bool = True) -> InlineKeyboardMarkup:
+    """Шаг 7: подсказка по вложению + назад + пропуск (Telegram не открывает галерею по inline-кнопке)."""
+    markup = InlineKeyboardMarkup()
+    markup.add(
+        InlineKeyboardButton(
+            "📎 Как прикрепить фото или файл",
+            callback_data="media_help",
+        )
+    )
+    if with_wizard_back:
+        markup.add(InlineKeyboardButton("◀️ Назад", callback_data="wizard_back"))
+    markup.add(InlineKeyboardButton("⏭ Пропустить", callback_data="skip_media"))
+    return markup
+
+
+def wizard_back_only_keyboard() -> InlineKeyboardMarkup:
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("◀️ Назад", callback_data="wizard_back"))
+    return markup
+
+
+def get_twitch_device_poll_keyboard() -> InlineKeyboardMarkup:
+    markup = InlineKeyboardMarkup()
+    markup.add(
+        InlineKeyboardButton("✅ Проверить авторизацию", callback_data="twitch_auth_poll")
+    )
     return markup
 
 
@@ -149,14 +185,32 @@ def get_giveaway_list_keyboard(giveaways: list) -> InlineKeyboardMarkup:
     return markup
 
 
-def get_giveaway_view_keyboard(giveaway_id: int) -> InlineKeyboardMarkup:
-    """Клавиатура просмотра розыгрыша с кнопкой удаления"""
+def get_giveaway_view_keyboard(giveaway_id: int, is_finished: bool = False) -> InlineKeyboardMarkup:
+    """Просмотр: досрочное завершение (если не завершён), удаление."""
     markup = InlineKeyboardMarkup(row_width=1)
+    if not is_finished:
+        markup.add(InlineKeyboardButton(
+            "⏹ Завершить досрочно",
+            callback_data=f"early_end_giveaway_{giveaway_id}",
+        ))
     markup.add(InlineKeyboardButton(
         "🗑 Удалить розыгрыш",
-        callback_data=f"delete_giveaway_{giveaway_id}"
+        callback_data=f"delete_giveaway_{giveaway_id}",
     ))
     markup.add(InlineKeyboardButton("🔙 К списку", callback_data="my_giveaways"))
+    return markup
+
+
+def get_early_end_confirm_keyboard(giveaway_id: int) -> InlineKeyboardMarkup:
+    markup = InlineKeyboardMarkup(row_width=1)
+    markup.add(InlineKeyboardButton(
+        "✅ Да, завершить и подвести итоги",
+        callback_data=f"confirm_early_end_{giveaway_id}",
+    ))
+    markup.add(InlineKeyboardButton(
+        "❌ Отмена",
+        callback_data=f"view_giveaway_{giveaway_id}",
+    ))
     return markup
 
 

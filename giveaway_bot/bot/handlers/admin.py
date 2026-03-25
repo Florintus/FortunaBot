@@ -1,4 +1,6 @@
 from datetime import datetime, timedelta
+from html import escape
+import logging
 import telebot
 from telebot.types import Message, CallbackQuery
 from bot.config import ADMIN_IDS
@@ -6,16 +8,37 @@ from bot.keyboards.inline import (
     get_admin_menu, get_confirm_keyboard, get_skip_button,
     get_giveaway_list_keyboard, get_calendar_keyboard,
     get_time_keyboard, get_duration_keyboard,
-    get_giveaway_view_keyboard, get_confirm_delete_keyboard
+    get_giveaway_view_keyboard, get_confirm_delete_keyboard,
+    wizard_back_only_keyboard, get_media_step_keyboard,
+    get_early_end_confirm_keyboard,
 )
 from bot.utils.states import FSMContext, States
+from bot.utils.twitch_parse import normalize_twitch_channel_login
 from bot.services.giveaway_service import GiveawayService
+from bot.utils.scheduler import run_finish_giveaway_now
 
 bot = None
+
+# Шаг 5 (Twitch): текст в двух местах — переход с шага 4 и возврат «Назад» с шага 6
+_MSG_STEP5_TWITCH = (
+    "🎮 <b>Шаг 5 из 8</b> — Twitch каналы\n\n"
+    "Укажите каналы: <b>логин</b> или целиком ссылку "
+    "<code>https://www.twitch.tv/ник</code> — <b>по одному на строку</b>.\n"
+    "Из ссылки бот возьмёт только логин (ссылки в посте и при проверке будут верными).\n\n"
+    "Если Twitch не нужен — «Пропустить»."
+)
 
 
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
+
+
+def _callback_answer_text(text: str, max_len: int = 200) -> str:
+    """Telegram answerCallbackQuery: не более 200 символов."""
+    text = text.strip()
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 1] + "…"
 
 
 def register_admin_handlers(telegram_bot):
@@ -106,7 +129,8 @@ def register_admin_handlers(telegram_bot):
                 message.chat.id,
                 f"✅ Канал <b>{chat.title or channel}</b> выбран!\n\n"
                 f"📝 <b>Шаг 2 из 8</b> — Введите название розыгрыша:",
-                parse_mode='HTML'
+                parse_mode='HTML',
+                reply_markup=wizard_back_only_keyboard(),
             )
         except Exception as e:
             bot.send_message(
@@ -124,7 +148,12 @@ def register_admin_handlers(telegram_bot):
     def get_title(message: Message):
         FSMContext.update_data(message.from_user.id, {'title': message.text})
         FSMContext.set_state(message.from_user.id, States.WAITING_DESCRIPTION)
-        bot.send_message(message.chat.id, "📄 <b>Шаг 3 из 8</b> — Введите описание розыгрыша:", parse_mode='HTML')
+        bot.send_message(
+            message.chat.id,
+            "📄 <b>Шаг 3 из 8</b> — Введите описание розыгрыша:",
+            parse_mode='HTML',
+            reply_markup=wizard_back_only_keyboard(),
+        )
 
     # ─────────────────────────────────────────
     #  Шаг 3: Описание
@@ -140,7 +169,8 @@ def register_admin_handlers(telegram_bot):
             "Введите список каналов по одному на строку:\n"
             "Формат: <code>@channel_username</code> или <code>-100123456789</code>\n\n"
             "Например:\n<code>@my_channel\n@another_channel</code>",
-            parse_mode='HTML'
+            parse_mode='HTML',
+            reply_markup=wizard_back_only_keyboard(),
         )
 
     # ─────────────────────────────────────────
@@ -157,11 +187,9 @@ def register_admin_handlers(telegram_bot):
         FSMContext.set_state(message.from_user.id, States.WAITING_TWITCH)
         bot.send_message(
             message.chat.id,
-            "🎮 <b>Шаг 5 из 8</b> — Twitch каналы\n\n"
-            "Введите список Twitch каналов (по одному на строку)\n"
-            "или нажмите Пропустить:",
-            parse_mode='HTML',
-            reply_markup=get_skip_button("skip_twitch")
+            _MSG_STEP5_TWITCH,
+            parse_mode="HTML",
+            reply_markup=get_skip_button("skip_twitch", with_wizard_back=True),
         )
 
     # ─────────────────────────────────────────
@@ -172,18 +200,44 @@ def register_admin_handlers(telegram_bot):
     def skip_twitch(call: CallbackQuery):
         state, _ = FSMContext.get_state(call.from_user.id)
         if state != States.WAITING_TWITCH:
+            bot.answer_callback_query(call.id)
             return
         bot.answer_callback_query(call.id)
         FSMContext.update_data(call.from_user.id, {'twitch_channels': []})
         FSMContext.set_state(call.from_user.id, States.WAITING_WINNERS)
-        bot.send_message(call.message.chat.id, "🏆 <b>Шаг 6 из 8</b> — Введите количество победителей:", parse_mode='HTML')
+        bot.send_message(
+            call.message.chat.id,
+            "🏆 <b>Шаг 6 из 8</b> — Введите количество победителей:",
+            parse_mode='HTML',
+            reply_markup=wizard_back_only_keyboard(),
+        )
 
     @bot.message_handler(func=lambda msg: FSMContext.get_state(msg.from_user.id)[0] == States.WAITING_TWITCH)
     def get_twitch(message: Message):
-        channels = [ch.strip() for ch in message.text.split('\n') if ch.strip()]
-        FSMContext.update_data(message.from_user.id, {'twitch_channels': channels})
+        raw_lines = [ch.strip() for ch in message.text.split("\n") if ch.strip()]
+        seen: set[str] = set()
+        channels: list[str] = []
+        for line in raw_lines:
+            login = normalize_twitch_channel_login(line)
+            if login and login not in seen:
+                seen.add(login)
+                channels.append(login)
+        if raw_lines and not channels:
+            bot.send_message(
+                message.chat.id,
+                "❌ Не удалось распознать каналы. Укажите логин или полную ссылку "
+                "<code>https://www.twitch.tv/ник</code> — по одному на строку.",
+                parse_mode="HTML",
+            )
+            return
+        FSMContext.update_data(message.from_user.id, {"twitch_channels": channels})
         FSMContext.set_state(message.from_user.id, States.WAITING_WINNERS)
-        bot.send_message(message.chat.id, "🏆 <b>Шаг 6 из 8</b> — Введите количество победителей:", parse_mode='HTML')
+        bot.send_message(
+            message.chat.id,
+            "🏆 <b>Шаг 6 из 8</b> — Введите количество победителей:",
+            parse_mode='HTML',
+            reply_markup=wizard_back_only_keyboard(),
+        )
 
     # ─────────────────────────────────────────
     #  Шаг 6: Победители
@@ -200,10 +254,12 @@ def register_admin_handlers(telegram_bot):
             bot.send_message(
                 message.chat.id,
                 "🖼 <b>Шаг 7 из 8</b> — Медиа\n\n"
-                "Отправьте фото или файл для розыгрыша\n"
-                "или нажмите Пропустить:",
-                parse_mode='HTML',
-                reply_markup=get_skip_button("skip_media")
+                "Отправьте <b>одно фото</b> или <b>один файл</b> в этот чат "
+                "(в клиенте Telegram нажмите 📎 рядом с полем ввода).\n\n"
+                "Кнопка ниже открывает подсказку, если не видно, как прикрепить файл.\n"
+                "Или нажмите «Пропустить», если медиа не нужно.",
+                parse_mode="HTML",
+                reply_markup=get_media_step_keyboard(with_wizard_back=True),
             )
         except ValueError:
             bot.send_message(message.chat.id, "❌ Введите целое число больше 0!")
@@ -212,10 +268,31 @@ def register_admin_handlers(telegram_bot):
     #  Шаг 7: Медиа
     # ─────────────────────────────────────────
 
+    @bot.callback_query_handler(func=lambda call: call.data == "media_help")
+    def media_help(call: CallbackQuery):
+        if not is_admin(call.from_user.id):
+            bot.answer_callback_query(call.id)
+            return
+        state, _ = FSMContext.get_state(call.from_user.id)
+        if state != States.WAITING_MEDIA:
+            bot.answer_callback_query(call.id)
+            return
+        bot.answer_callback_query(call.id)
+        bot.send_message(
+            call.message.chat.id,
+            "📎 <b>Как прикрепить фото или файл</b>\n\n"
+            "1. Нажмите значок <b>скрепки</b> (📎) слева от поля ввода сообщения.\n"
+            "2. Выберите «Фото» или «Файл» и отправьте одно вложение боту.\n\n"
+            "В веб-версии Telegram: кнопка вложения обычно рядом с полем чата.\n\n"
+            "Бот не может открыть галерею по кнопке — только так.",
+            parse_mode="HTML",
+        )
+
     @bot.callback_query_handler(func=lambda call: call.data == "skip_media")
     def skip_media(call: CallbackQuery):
         state, _ = FSMContext.get_state(call.from_user.id)
         if state != States.WAITING_MEDIA:
+            bot.answer_callback_query(call.id)
             return
         bot.answer_callback_query(call.id)
         _ask_start_time(call.from_user.id, call.message.chat.id)
@@ -247,7 +324,8 @@ def register_admin_handlers(telegram_bot):
     # Навигация по календарю
     @bot.callback_query_handler(func=lambda call: call.data.startswith("cal_start_nav_"))
     def calendar_start_nav(call: CallbackQuery):
-        _, _, _, _, year, month = call.data.split('_')
+        # cal_start_nav_YEAR_MONTH
+        _, _, _, year, month = call.data.split('_')
         bot.edit_message_reply_markup(
             call.message.chat.id,
             call.message.message_id,
@@ -289,7 +367,8 @@ def register_admin_handlers(telegram_bot):
             f"Формат: <code>ЧЧ:ММ</code> (например: <code>15:30</code>)",
             call.message.chat.id,
             call.message.message_id,
-            parse_mode='HTML'
+            parse_mode='HTML',
+            reply_markup=wizard_back_only_keyboard(),
         )
         bot.answer_callback_query(call.id)
 
@@ -386,7 +465,8 @@ def register_admin_handlers(telegram_bot):
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("cal_end_nav_"))
     def calendar_end_nav(call: CallbackQuery):
-        _, _, _, _, year, month = call.data.split('_')
+        # cal_end_nav_YEAR_MONTH
+        _, _, _, year, month = call.data.split('_')
         bot.edit_message_reply_markup(
             call.message.chat.id,
             call.message.message_id,
@@ -431,7 +511,8 @@ def register_admin_handlers(telegram_bot):
             f"Формат: <code>ЧЧ:ММ</code> (например: <code>23:59</code>)",
             call.message.chat.id,
             call.message.message_id,
-            parse_mode='HTML'
+            parse_mode='HTML',
+            reply_markup=wizard_back_only_keyboard(),
         )
         bot.answer_callback_query(call.id)
 
@@ -528,7 +609,12 @@ def register_admin_handlers(telegram_bot):
                 reply_markup=get_admin_menu()
             )
         except Exception as e:
-            bot.answer_callback_query(call.id, f"❌ Ошибка: {e}", show_alert=True)
+            logging.exception("confirm_publish")
+            bot.answer_callback_query(
+                call.id,
+                _callback_answer_text(f"❌ Ошибка: {e}"),
+                show_alert=True,
+            )
 
     @bot.callback_query_handler(func=lambda call: call.data == "cancel_giveaway")
     def cancel_giveaway(call: CallbackQuery):
@@ -539,6 +625,195 @@ def register_admin_handlers(telegram_bot):
             call.message.message_id,
             reply_markup=get_admin_menu()
         )
+
+    @bot.callback_query_handler(func=lambda call: call.data == "dur_end_back")
+    def dur_end_back(call: CallbackQuery):
+        if not is_admin(call.from_user.id):
+            bot.answer_callback_query(call.id)
+            return
+        _, data = FSMContext.get_state(call.from_user.id)
+        start_time = data.get("start_time")
+        if not start_time:
+            bot.answer_callback_query(call.id, "Сначала выберите дату начала", show_alert=True)
+            return
+        FSMContext.set_state(call.from_user.id, States.WAITING_END_TIME)
+        bot.edit_message_text(
+            f"✅ Начало: <b>{start_time.strftime('%d.%m.%Y %H:%M')}</b>\n\n"
+            f"⏱ Выберите длительность розыгрыша или укажите дату окончания вручную:",
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="HTML",
+            reply_markup=get_duration_keyboard(),
+        )
+        bot.answer_callback_query(call.id)
+
+    @bot.callback_query_handler(func=lambda call: call.data == "wizard_back")
+    def wizard_back_handler(call: CallbackQuery):
+        if not is_admin(call.from_user.id):
+            bot.answer_callback_query(call.id, "❌ Нет доступа")
+            return
+
+        state, data = FSMContext.get_state(call.from_user.id)
+        chat_id = call.message.chat.id
+        uid = call.from_user.id
+        bot.answer_callback_query(call.id)
+
+        if state in (None, States.WAITING_CHANNEL):
+            bot.send_message(
+                chat_id,
+                "Это первый шаг. Укажите канал сообщением выше или откройте /menu.",
+            )
+            return
+
+        if state == States.WAITING_TITLE:
+            FSMContext.set_state(uid, States.WAITING_CHANNEL)
+            bot.send_message(
+                chat_id,
+                "📢 <b>Шаг 1 из 8</b> — Канал публикации\n\n"
+                "В какой канал/группу публиковать розыгрыш?\n\n"
+                "Введите @username или ID канала:\n"
+                "Например: <code>@my_channel</code> или <code>-1001234567890</code>\n\n"
+                "⚠️ Бот должен быть администратором в канале!",
+                parse_mode="HTML",
+            )
+            return
+
+        if state == States.WAITING_DESCRIPTION:
+            FSMContext.set_state(uid, States.WAITING_TITLE)
+            bot.send_message(
+                chat_id,
+                "📝 <b>Шаг 2 из 8</b> — Введите название розыгрыша:",
+                parse_mode="HTML",
+                reply_markup=wizard_back_only_keyboard(),
+            )
+            return
+
+        if state == States.WAITING_CHANNELS:
+            FSMContext.set_state(uid, States.WAITING_DESCRIPTION)
+            bot.send_message(
+                chat_id,
+                "📄 <b>Шаг 3 из 8</b> — Введите описание розыгрыша:",
+                parse_mode="HTML",
+                reply_markup=wizard_back_only_keyboard(),
+            )
+            return
+
+        if state == States.WAITING_TWITCH:
+            FSMContext.set_state(uid, States.WAITING_CHANNELS)
+            bot.send_message(
+                chat_id,
+                "📺 <b>Шаг 4 из 8</b> — Обязательные каналы для подписки\n\n"
+                "Введите список каналов по одному на строку:\n"
+                "Формат: <code>@channel_username</code> или <code>-100123456789</code>\n\n"
+                "Например:\n<code>@my_channel\n@another_channel</code>",
+                parse_mode="HTML",
+                reply_markup=wizard_back_only_keyboard(),
+            )
+            return
+
+        if state == States.WAITING_WINNERS:
+            FSMContext.set_state(uid, States.WAITING_TWITCH)
+            bot.send_message(
+                chat_id,
+                _MSG_STEP5_TWITCH,
+                parse_mode="HTML",
+                reply_markup=get_skip_button("skip_twitch", with_wizard_back=True),
+            )
+            return
+
+        if state == States.WAITING_MEDIA:
+            FSMContext.set_state(uid, States.WAITING_WINNERS)
+            bot.send_message(
+                chat_id,
+                "🏆 <b>Шаг 6 из 8</b> — Введите количество победителей:",
+                parse_mode="HTML",
+                reply_markup=wizard_back_only_keyboard(),
+            )
+            return
+
+        if state == States.WAITING_START_TIME:
+            FSMContext.update_data(
+                uid,
+                {
+                    "start_time": None,
+                    "end_time": None,
+                    "_pending_start_date": None,
+                    "_pending_end_date": None,
+                },
+            )
+            FSMContext.set_state(uid, States.WAITING_MEDIA)
+            bot.send_message(
+                chat_id,
+                "🖼 <b>Шаг 7 из 8</b> — Медиа\n\n"
+                "Отправьте <b>одно фото</b> или <b>один файл</b> в этот чат "
+                "(в клиенте Telegram нажмите 📎 рядом с полем ввода).\n\n"
+                "Кнопка ниже открывает подсказку, если не видно, как прикрепить файл.\n"
+                "Или нажмите «Пропустить», если медиа не нужно.",
+                parse_mode="HTML",
+                reply_markup=get_media_step_keyboard(with_wizard_back=True),
+            )
+            return
+
+        if state == States.WAITING_START_MANUAL:
+            FSMContext.update_data(uid, {"_pending_start_date": None})
+            FSMContext.set_state(uid, States.WAITING_START_TIME)
+            now = datetime.utcnow()
+            bot.send_message(
+                chat_id,
+                "📅 <b>Шаг 8 из 8</b> — Дата и время начала\n\nВыберите дату:",
+                parse_mode="HTML",
+                reply_markup=get_calendar_keyboard(now.year, now.month, "start"),
+            )
+            return
+
+        if state == States.WAITING_END_TIME:
+            FSMContext.update_data(uid, {"end_time": None, "_pending_end_date": None})
+            FSMContext.set_state(uid, States.WAITING_START_TIME)
+            now = datetime.utcnow()
+            bot.send_message(
+                chat_id,
+                "📅 Выберите дату и время <b>начала</b> розыгрыша:",
+                parse_mode="HTML",
+                reply_markup=get_calendar_keyboard(now.year, now.month, "start"),
+            )
+            return
+
+        if state == States.WAITING_END_MANUAL:
+            FSMContext.update_data(uid, {"_pending_end_date": None})
+            FSMContext.set_state(uid, States.WAITING_END_TIME)
+            st = data.get("start_time") or datetime.utcnow()
+            bot.send_message(
+                chat_id,
+                f"✅ Начало: <b>{st.strftime('%d.%m.%Y %H:%M')}</b>\n\n"
+                f"⏱ Выберите длительность розыгрыша или укажите дату окончания вручную:",
+                parse_mode="HTML",
+                reply_markup=get_duration_keyboard(),
+            )
+            return
+
+        if state == States.CONFIRM:
+            FSMContext.set_state(uid, States.WAITING_END_TIME)
+            st = data.get("start_time")
+            if not st:
+                now = datetime.utcnow()
+                FSMContext.set_state(uid, States.WAITING_START_TIME)
+                bot.send_message(
+                    chat_id,
+                    "📅 Выберите дату начала:",
+                    parse_mode="HTML",
+                    reply_markup=get_calendar_keyboard(now.year, now.month, "start"),
+                )
+                return
+            bot.send_message(
+                chat_id,
+                f"✅ Начало: <b>{st.strftime('%d.%m.%Y %H:%M')}</b>\n\n"
+                f"⏱ Выберите длительность или дату окончания:",
+                parse_mode="HTML",
+                reply_markup=get_duration_keyboard(),
+            )
+            return
+
+        bot.send_message(chat_id, "Назад из этого шага недоступен. Используйте /menu.")
 
     # ─────────────────────────────────────────
     #  Игнор пустых кнопок календаря
@@ -584,9 +859,65 @@ def register_admin_handlers(telegram_bot):
             f"👥 Участников: {giveaway['participants_count']}\n\n"
             f"Статус: {status}"
         )
+        bot.answer_callback_query(call.id)
         bot.edit_message_text(
-            text, call.message.chat.id, call.message.message_id,
-            parse_mode='HTML', reply_markup=get_giveaway_view_keyboard(giveaway_id)
+            text,
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="HTML",
+            reply_markup=get_giveaway_view_keyboard(
+                giveaway_id,
+                is_finished=giveaway["is_finished"],
+            ),
+        )
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("early_end_giveaway_"))
+    def early_end_giveaway_prompt(call: CallbackQuery):
+        if not is_admin(call.from_user.id):
+            bot.answer_callback_query(call.id)
+            return
+        giveaway_id = int(call.data.rsplit("_", 1)[-1])
+        giveaway = GiveawayService.get_giveaway(giveaway_id)
+        if not giveaway or giveaway["creator_id"] != call.from_user.id:
+            bot.answer_callback_query(call.id, "❌ Нет доступа", show_alert=True)
+            return
+        if giveaway["is_finished"]:
+            bot.answer_callback_query(call.id, "Розыгрыш уже завершён", show_alert=True)
+            return
+        bot.answer_callback_query(call.id)
+        bot.edit_message_text(
+            "⏹ <b>Досрочное завершение</b>\n\n"
+            "Будут выбраны победители (если есть участники), итоги отправятся в канал "
+            "и победителям в личные сообщения (если бот может им написать).\n\n"
+            "Подтвердите:",
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="HTML",
+            reply_markup=get_early_end_confirm_keyboard(giveaway_id),
+        )
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("confirm_early_end_"))
+    def early_end_giveaway_run(call: CallbackQuery):
+        if not is_admin(call.from_user.id):
+            bot.answer_callback_query(call.id)
+            return
+        giveaway_id = int(call.data.rsplit("_", 1)[-1])
+        giveaway = GiveawayService.get_giveaway(giveaway_id)
+        if not giveaway or giveaway["creator_id"] != call.from_user.id:
+            bot.answer_callback_query(call.id, "❌ Нет доступа", show_alert=True)
+            return
+        if giveaway["is_finished"]:
+            bot.answer_callback_query(call.id, "Уже завершён", show_alert=True)
+            return
+        bot.answer_callback_query(call.id, "Завершаем…")
+        run_finish_giveaway_now(giveaway_id)
+        bot.edit_message_text(
+            f"✅ Розыгрыш <b>{escape(giveaway['title'])}</b> завершён досрочно.\n"
+            "Проверьте канал и логи бота при необходимости.",
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="HTML",
+            reply_markup=get_admin_menu(),
         )
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("delete_giveaway_"))

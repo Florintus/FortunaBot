@@ -1,7 +1,28 @@
+import json
 import random
-from datetime import datetime
+
 from bot.database.database import get_db
 from bot.database.models import Giveaway, Participant, Winner
+
+
+def _coerce_json_list(value) -> list:
+    """Из FSM/БД иногда приходит JSON-массив строкой — для Column(JSON) нужен list."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return []
+        try:
+            parsed = json.loads(s)
+            if isinstance(parsed, list):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+        return [s]
+    return []
 
 
 class GiveawayService:
@@ -32,8 +53,11 @@ class GiveawayService:
     @staticmethod
     def create_giveaway(data: dict) -> dict:
         """Создание розыгрыша"""
+        row = dict(data)
+        row["required_channels"] = _coerce_json_list(row.get("required_channels"))
+        row["twitch_channels"] = _coerce_json_list(row.get("twitch_channels"))
         with get_db() as db:
-            giveaway = Giveaway(**data)
+            giveaway = Giveaway(**row)
             db.add(giveaway)
             db.flush()
             db.refresh(giveaway)
@@ -78,25 +102,21 @@ class GiveawayService:
 
     @staticmethod
     def get_active_giveaways() -> list:
-        """Получение розыгрышей готовых к публикации"""
+        """Непубликованные розыгрыши (время публикации решает планировщик)."""
         with get_db() as db:
-            now = datetime.utcnow()
             giveaways = db.query(Giveaway).filter(
-                Giveaway.is_published == False,
-                Giveaway.start_time <= now
-            ).all()
+                Giveaway.is_published.is_(False)
+            ).order_by(Giveaway.start_time.asc()).all()
             return [GiveawayService._giveaway_to_dict(g) for g in giveaways]
 
     @staticmethod
     def get_finished_giveaways() -> list:
-        """Получение завершённых розыгрышей"""
+        """Опубликованные, но ещё не завершённые (момент завершения решает планировщик)."""
         with get_db() as db:
-            now = datetime.utcnow()
             giveaways = db.query(Giveaway).filter(
-                Giveaway.is_published == True,
-                Giveaway.is_finished == False,
-                Giveaway.end_time <= now
-            ).all()
+                Giveaway.is_published.is_(True),
+                Giveaway.is_finished.is_(False)
+            ).order_by(Giveaway.end_time.asc()).all()
             return [GiveawayService._giveaway_to_dict(g) for g in giveaways]
 
     @staticmethod
@@ -109,6 +129,7 @@ class GiveawayService:
 
             participants = db.query(Participant).filter_by(giveaway_id=giveaway_id).all()
             if not participants:
+                giveaway.is_finished = True
                 return []
 
             winners_count = min(giveaway.winners_count, len(participants))

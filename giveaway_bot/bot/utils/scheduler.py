@@ -1,12 +1,19 @@
 from apscheduler.schedulers.background import BackgroundScheduler
 from datetime import datetime
+from html import escape
 import telebot
 from bot.config import BOT_TOKEN
 from bot.services.giveaway_service import GiveawayService
 from bot.keyboards.inline import get_participate_button
+from bot.utils.twitch_parse import normalize_twitch_channel_login
 
 bot = telebot.TeleBot(BOT_TOKEN)
 scheduler = BackgroundScheduler()
+
+
+def _safe_text(value) -> str:
+    """Экранирует пользовательский текст для Telegram HTML."""
+    return escape(str(value or ""))
 
 
 def publish_giveaway(giveaway_id: int):
@@ -21,18 +28,20 @@ def publish_giveaway(giveaway_id: int):
             print(f"❌ Розыгрыш {giveaway_id}: не указан канал публикации")
             return
 
-        text = f"🎉 <b>{giveaway['title']}</b>\n\n"
-        text += f"{giveaway['description']}\n\n"
+        text = f"🎉 <b>{_safe_text(giveaway['title'])}</b>\n\n"
+        text += f"{_safe_text(giveaway['description'])}\n\n"
         text += f"👥 Победителей: {giveaway['winners_count']}\n"
         text += f"⏰ Окончание: {giveaway['end_time'].strftime('%d.%m.%Y %H:%M')} UTC\n\n"
         text += "📋 <b>Условия участия:</b>\n"
         for channel in giveaway['required_channels']:
-            text += f"• Подписаться на {channel}\n"
+            text += f"• Подписаться на {_safe_text(channel)}\n"
 
         if giveaway['twitch_channels']:
-            text += "\n🎮 <b>Twitch подписки:</b>\n"
+            text += "\n🎮 <b>Twitch (follow):</b>\n"
             for channel in giveaway['twitch_channels']:
-                text += f"• {channel}\n"
+                login = normalize_twitch_channel_login(channel) or channel
+                url = f"https://twitch.tv/{login}"
+                text += f'• <a href="{escape(url)}">{_safe_text(login)}</a>\n'
 
         markup = get_participate_button(giveaway['id'])
 
@@ -77,12 +86,16 @@ def finish_giveaway(giveaway_id: int):
         channel_id = giveaway.get('channel_id')
         winners = GiveawayService.select_winners(giveaway_id)
 
-        text = f"🏆 <b>Итоги розыгрыша: {giveaway['title']}</b>\n\n"
+        text = f"🏆 <b>Итоги розыгрыша: {_safe_text(giveaway['title'])}</b>\n\n"
 
         if winners:
             text += "🎊 <b>Победители:</b>\n\n"
             for i, winner in enumerate(winners, 1):
-                username = f"@{winner['username']}" if winner['username'] else winner['full_name']
+                username = (
+                    f"@{_safe_text(winner['username'])}"
+                    if winner['username']
+                    else _safe_text(winner['full_name'])
+                )
                 text += f"{i}. {username}\n"
             text += "\n✉️ Победители будут уведомлены в личных сообщениях!"
         else:
@@ -96,7 +109,7 @@ def finish_giveaway(giveaway_id: int):
                 bot.send_message(
                     winner['user_id'],
                     f"🎉 <b>Поздравляем!</b>\n\n"
-                    f"Вы выиграли в розыгрыше:\n<b>{giveaway['title']}</b>\n\n"
+                    f"Вы выиграли в розыгрыше:\n<b>{_safe_text(giveaway['title'])}</b>\n\n"
                     f"Организатор свяжется с вами в ближайшее время!",
                     parse_mode='HTML'
                 )
@@ -155,6 +168,22 @@ def check_giveaways():
 
     except Exception as e:
         print(f"❌ Ошибка check_giveaways: {e}")
+
+
+def cancel_giveaway_jobs(giveaway_id: int):
+    """Снимает отложенные publish/finish для розыгрыша (например перед досрочным завершением)."""
+    for jid in (f"publish_{giveaway_id}", f"finish_{giveaway_id}"):
+        try:
+            if scheduler.get_job(jid):
+                scheduler.remove_job(jid)
+        except Exception:
+            pass
+
+
+def run_finish_giveaway_now(giveaway_id: int):
+    """Досрочно подвести итоги: отменить задачи планировщика и вызвать finish_giveaway."""
+    cancel_giveaway_jobs(giveaway_id)
+    finish_giveaway(giveaway_id)
 
 
 def start_scheduler():

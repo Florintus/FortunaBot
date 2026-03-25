@@ -11,7 +11,16 @@ def _json_serializer(obj):
 
 
 def _json_deserializer(data: dict) -> dict:
+    _list_keys = frozenset({"required_channels", "twitch_channels"})
     for key, value in data.items():
+        if isinstance(value, str) and key in _list_keys:
+            try:
+                parsed = json.loads(value)
+                if isinstance(parsed, list):
+                    data[key] = parsed
+                    continue
+            except json.JSONDecodeError:
+                pass
         if isinstance(value, str):
             try:
                 data[key] = datetime.fromisoformat(value)

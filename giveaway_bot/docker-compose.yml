@@ -26,7 +26,11 @@ services:
     env_file:
       - .env
     environment:
-      - PYTHONUNBUFFERED=1    # <- добавь эту строку
+      PYTHONUNBUFFERED: "1"
+      # Явная подстановка из того же .env, что и env_file (каталог compose).
+      # Если Twitch «не настроен», проверьте, что эти ключи есть в .env рядом с compose.
+      TWITCH_CLIENT_ID: ${TWITCH_CLIENT_ID:-}
+      TWITCH_CLIENT_SECRET: ${TWITCH_CLIENT_SECRET:-}
     depends_on:
       postgres:
         condition: service_healthy
