@@ -1,31 +1,3 @@
-# # Optional: for deep-links like https://t.me/<BOT_USERNAME>?start=twitch
-
-# import os
-# from dotenv import load_dotenv
-
-# load_dotenv()
-
-# # Telegram
-# BOT_TOKEN = os.getenv('5073738381:AAG2kYzHXd603ZPMiNqqQd90Zz0mIcGLvZk')
-# ADMIN_IDS = [int(id.strip()) for id in os.getenv('ADMIN_IDS', '').split(',') if id.strip()]
-# CHANNEL_ID = os.getenv('')
-
-# BOT_USERNAME = 'testStmalina_bot'
-
-# # Database
-# DATABASE_URL = os.getenv('postgresql+psycopg2://randomgod:randomgod@db:5432/randomgod')
-
-# # Twitch
-# TWITCH_ENABLED = False
-
-# TWITCH_CLIENT_ID = os.getenv('jbojui9nai523rntvwzkbyjq2208wg')
-# TWITCH_CLIENT_SECRET = os.getenv('by9ij5fsmyf6wwi90ik9zeepq1nf4q')
-# TWITCH_FOLLOW_SCOPE = 'user:read:follows'
-
-# # Другие настройки
-# MEDIA_DIR = '/app/media'
-
-
 import os
 from pathlib import Path
 
